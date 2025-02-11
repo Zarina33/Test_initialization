@@ -4,7 +4,7 @@ from docx import Document
 import json
 
 # Initialize the OpenAI client
-client = OpenAI(api_key='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')
+client = OpenAI(api_key='')
 
 # Function to extract text from a .docx file
 def extract_text_from_docx(file_path):
