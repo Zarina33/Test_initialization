@@ -1,41 +1,59 @@
-from docx import Document
+#!/usr/bin/env python3
+import os
+import logging
+from pathlib import Path
 
-def extract_and_format_answers(docx_path):
-    # Открываем документ
-    doc = Document(docx_path)
+# Настройка логирования: вывод в консоль и запись в файл
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("empty_files_check.log", encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+
+def check_empty_files(directory):
+    """
+    Рекурсивно проходит по директории и ищет пустые файлы.
     
-    # Получаем все таблицы из документа
-    for table in doc.tables:
-        variants = {}
+    Файл считается пустым, если его размер равен 0 байт
+    или если после удаления пробельных символов он оказывается пустым.
+    
+    Args:
+        directory (str или Path): Путь к директории для проверки.
         
-        # Проходим по строкам таблицы
-        for row in table.rows:
-            # Получаем все ячейки в строке
-            cells = [cell.text.strip().lower() for cell in row.cells]
-            
-            # Пропускаем пустые строки
-            if not cells or not any(cells):
-                continue
-                
-            # Извлекаем номер варианта и ответы
-            variant = cells[0].replace('вар.', '').strip()
-            # Убираем первую ячейку (номер варианта) и собираем ответы
-            answers = cells[1:]
-            
-            if variant and answers:
-                variants[variant] = answers
-        
-        # Форматируем и выводим результат для каждого варианта
-        for var_num, answers in sorted(variants.items()):
-            print(f"{var_num}-вар.")
-            formatted_answers = [f"{i+1}){ans};" for i, ans in enumerate(answers) if ans]
-            print(" ".join(formatted_answers))
-            print()  # Пустая строка между вариантами
+    Returns:
+        list: Список путей пустых файлов.
+    """
+    empty_files = []
+    directory = Path(directory)
+    
+    logging.info(f"Начинаем проверку файлов в директории: {directory}")
+    for file_path in directory.rglob("*"):
+        if file_path.is_file():
+            try:
+                # Если размер файла 0 байт
+                if file_path.stat().st_size == 0:
+                    logging.info(f"Пустой файл (0 байт): {file_path}")
+                    empty_files.append(file_path)
+                else:
+                    # Если файл содержит только пробельные символы
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        content = f.read()
+                        if not content.strip():
+                            logging.info(f"Файл содержит только пробелы: {file_path}")
+                            empty_files.append(file_path)
+            except Exception as e:
+                logging.error(f"Ошибка при проверке файла {file_path}: {e}")
+    
+    logging.info(f"Проверка завершена. Найдено пустых файлов: {len(empty_files)}")
+    return empty_files
 
-# Использование:
 if __name__ == "__main__":
-    # Замените на путь к вашему файлу
-    docx_file = "path_to_your_file.docx"
-    extract_and_format_answers(docx_file)
+    # Укажите путь к директории, в которой нужно проверить файлы
+    output_directory = "/mnt/ks/Works/3nd_tests/extracted_text"
+    empty_files = check_empty_files(output_directory)
+
 
     
