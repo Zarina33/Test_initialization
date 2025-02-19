@@ -18,7 +18,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Initialize the OpenAI client
-client = OpenAI(api_key='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')
+client = OpenAI(api_key='')
 logger.info("OpenAI client initialized")
 
 def fix_formula_paths(text):
