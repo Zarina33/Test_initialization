@@ -3,11 +3,12 @@ from openai import OpenAI
 import json
 import logging
 from datetime import datetime
+import re
 
 # Set up logging
 log_filename = f'conversion_log_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
 logging.basicConfig(
-    level=logging.DEBUG,  # Изменил уровень на DEBUG
+    level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
         logging.FileHandler(log_filename, encoding='utf-8'),
@@ -20,18 +21,62 @@ logger = logging.getLogger(__name__)
 client = OpenAI(api_key='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')
 logger.info("OpenAI client initialized")
 
+def fix_formula_paths(text):
+    """Исправляет обрезанные пути к формулам"""
+    try:
+        pattern = r'\[Формула заменена: [^\]]*(?:\]|$)'
+        paths = re.finditer(pattern, text)
+        fixed_text = text
+        
+        for path in paths:
+            if not path.group().endswith(']'):
+                # Если путь обрезан, пытаемся его восстановить
+                original_path = path.group()
+                fixed_path = original_path + ']'
+                fixed_text = fixed_text.replace(original_path, fixed_path)
+        
+        return fixed_text
+    except Exception as e:
+        logger.error(f"Error fixing formula paths: {e}")
+        return text
+
+def validate_json_response(text):
+    """Проверяет и исправляет JSON-ответ"""
+    try:
+        # Проверяем, есть ли незакрытые строки с формулами
+        if '[Формула заменена:' in text and not text.endswith('}'):
+            text = fix_formula_paths(text)
+        
+        # Пытаемся загрузить JSON
+        try:
+            data = json.loads(text)
+            return text
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON: {e}")
+            
+            # Если это похоже на обрезанный JSON, попробуем его восстановить
+            if text.count('{') > text.count('}'):
+                text = text.rstrip() + '}'
+            if '"questions": [' in text and not '"]}' in text:
+                text = text.rstrip() + ']}}'
+                
+            return text
+    except Exception as e:
+        logger.error(f"Error validating JSON: {e}")
+        return text
+
 def read_text_from_file(file_path):
     try:
         logger.info(f"Attempting to read file: {file_path}")
         with open(file_path, 'r', encoding='utf-8') as file:
             content = file.read()
-            logger.debug(f"File content:\n{content}")  # Добавил вывод содержимого
+            logger.debug(f"File content:\n{content}")
             return content
     except Exception as e:
         logger.error(f"Error reading file {file_path}: {e}")
         return ""
 
-def send_to_gpt4_for_json(content, model="gpt-4o-mini-2024-07-18", max_tokens=3000):
+def send_to_gpt4_for_json(content, model="gpt-4o-mini-2024-07-18", max_tokens=4000):
     try:
         logger.info(f"Sending content to GPT-4")
         print("\nInput Text:")
@@ -39,111 +84,60 @@ def send_to_gpt4_for_json(content, model="gpt-4o-mini-2024-07-18", max_tokens=30
         print(content)
         print("="*50)
         
-        prompt = """Преобразуй текст теста в JSON формат.
+        system_prompt = """Ты конвертер тестов в JSON формат. ОЧЕНЬ ВАЖНО: всегда сохраняй полные пути к формулам целиком, никогда не обрезай их."""
 
-Пример входного текста:
-```
-АЛГЕБРА, 8-КЛАСС
-9-сабак. Квадраттык тамыр түшүнүгү
-Тест
-1-суроо 
-туюнтмасынын маанисин тапкыла
-Жооптордун варианттары:
-а) 5
-б) 2
-в) 3
-г) 4
-Туура жообу: а
-```
-
-Требуемый формат JSON:
-```json
+        user_prompt = """Преобразуй тест в такую JSON структуру:
 {
-    "title": "АЛГЕБРА, 8-КЛАСС. 9-сабак. Квадраттык тамыр түшүнүгү",
+    "title": "Название предмета, класс и название урока",
     "questions": [
         {
-            "number": 1,
-            "question": "туюнтмасынын маанисин тапкыла",
+            "number": число,
+            "question": "полный текст вопроса",
             "options": [
-                "а) 5",
-                "б) 2",
-                "в) 3",
-                "г) 4"
+                "полный вариант ответа",
+                ...
             ],
-            "answer": "а"
+            "answer": "буква ответа"
         }
     ]
 }
-```
 
-Правила:
-1. В title объедини название предмета, класс и тему
-2. В number используй только число без дефиса и точки
-3. В options включай буквы вариантов
-4. В answer укажи букву или номер правильного ответа
-5. Сохраняй все пути к формулам и изображениям без изменений
+ВАЖНО:
+1. ВСЕГДА сохраняй полные пути к формулам, не обрезай их
+2. Каждый путь к формуле должен заканчиваться закрывающей скобкой ]
+3. Проверяй, что все JSON-строки правильно закрыты
+4. В options включай полный текст вариантов с буквами и знаками препинания
+5. В answer указывай только букву без точки и скобки
 
 Теперь преобразуй следующий текст:"""
 
         messages = [
-            {"role": "system", "content": "Ты помощник, который преобразует тексты тестов в JSON формат точно по заданному шаблону."},
-            {"role": "user", "content": prompt + "\n\n" + content}
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt + "\n\n" + content}
         ]
 
         response = client.chat.completions.create(
             model=model,
             messages=messages,
             max_tokens=max_tokens,
-            temperature=0.3  # Уменьшил temperature для более точных ответов
+            temperature=0.1
         )
         
         result = response.choices[0].message.content
-        logger.debug(f"GPT response:\n{result}")
+        logger.debug(f"Raw GPT response:\n{result}")
+        
+        # Проверяем и исправляем JSON
+        fixed_result = validate_json_response(result)
+        logger.debug(f"Fixed JSON response:\n{fixed_result}")
+        
         print("\nGPT Response:")
         print("="*50)
-        print(result)
+        print(fixed_result)
         print("="*50)
-        return result
+        return fixed_result
     except Exception as e:
         logger.error(f"Error contacting GPT-4 API: {e}")
         return ""
-
-def validate_and_fix_json(json_data):
-    try:
-        logger.debug(f"Validating JSON data:\n{json.dumps(json_data, ensure_ascii=False, indent=2)}")
-        
-        if not isinstance(json_data, dict):
-            logger.error(f"Invalid JSON: not a dictionary but {type(json_data)}")
-            raise ValueError("Invalid JSON structure")
-            
-        if "title" not in json_data or "questions" not in json_data:
-            logger.error("Missing required fields 'title' or 'questions'")
-            raise ValueError("Missing required fields")
-        
-        if not isinstance(json_data["questions"], list):
-            logger.error("'questions' is not a list")
-            json_data["questions"] = []
-        
-        for i, question in enumerate(json_data["questions"]):
-            if not isinstance(question, dict):
-                logger.error(f"Question {i+1} is not a dictionary")
-                continue
-                
-            # Ensure required keys exist
-            question.setdefault("number", i+1)
-            question.setdefault("question", "")
-            question.setdefault("options", [])
-            question.setdefault("answer", "")
-            
-            logger.debug(f"Processed question {i+1}:\n{json.dumps(question, ensure_ascii=False, indent=2)}")
-        
-        return json_data
-    except Exception as e:
-        logger.error(f"Validation error: {e}")
-        return {
-            "title": "",
-            "questions": []
-        }
 
 def process_file(file_path, output_base_dir):
     try:
@@ -181,13 +175,11 @@ def process_file(file_path, output_base_dir):
             logger.error(f"Failed JSON string: {stripped_response}")
             parsed_data = {"title": "", "questions": []}
         
-        validated_data = validate_and_fix_json(parsed_data)
-        
         # Create output directory if it doesn't exist
         os.makedirs(os.path.dirname(json_file_path), exist_ok=True)
         
         with open(json_file_path, 'w', encoding='utf-8') as f:
-            json.dump(validated_data, f, ensure_ascii=False, indent=4)
+            json.dump(parsed_data, f, ensure_ascii=False, indent=4)
             logger.info(f"Saved JSON to: {json_file_path}")
         
         return True
